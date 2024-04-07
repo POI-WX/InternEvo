@@ -47,8 +47,8 @@ def get_gqa_attn_cls(use_flash_attn, tp_mode, causal, softmax_scale, dropout, se
             inner_attn = inner_attn_cls(causal=causal, softmax_scale=softmax_scale, attention_dropout=dropout)
         elif device_backend == AcceleratorType.DIPU:
             from deeplink_ext.internlm_ops import (
-                FlashSelfAttention,
                 FlashCrossAttention,
+                FlashSelfAttention,
             )
 
             inner_attn_cls, inner_cross_attn_cls = FlashSelfAttention, FlashCrossAttention
