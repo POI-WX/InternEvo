@@ -171,7 +171,7 @@ class ApplyRotaryEmb(torch.autograd.Function):
 
 
 if AcceleratorType.DIPU == internlm_accelerator.get_accelerator_backend():
-    from deeplink_ext.internlm_ops import ApplyRotaryEmb as DeeplinkApplyRotaryEmb
+    from deeplink_ext.internevo_ops import ApplyRotaryEmb as DeeplinkApplyRotaryEmb
 
     apply_rotary_emb = DeeplinkApplyRotaryEmb.apply
 else:
@@ -259,7 +259,7 @@ class ApplyRotaryEmbQKV_(torch.autograd.Function):
 
 
 if AcceleratorType.DIPU == internlm_accelerator.get_accelerator_backend():
-    from deeplink_ext.internlm_ops import (
+    from deeplink_ext.internevo_ops import (
         ApplyRotaryEmbQKV_ as DeeplinkApplyRotaryEmbQKV_,
     )
 

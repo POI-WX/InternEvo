@@ -673,7 +673,7 @@ def try_import_RMSNorm():
     try:
         device_backend = internlm_accelerator.get_accelerator_backend()
         if device_backend == AcceleratorType.DIPU:
-            from deeplink_ext.internlm_ops import MixedFusedRMSNorm as RMSNorm
+            from deeplink_ext.internevo_ops import MixedFusedRMSNorm as RMSNorm
 
             return RMSNorm
         else:
