@@ -8,6 +8,7 @@ from einops import rearrange
 from torch import nn
 from torch.nn import functional as F
 
+from internlm.core.context import global_context as gpc
 from internlm.model.modules.embedding import new_rotary_embedding
 from internlm.model.modules.linear import new_linear
 from internlm.model.modules.utils import update_kv_cache
@@ -24,6 +25,8 @@ def _convert_cu_seqlens_for_qksplited(kwargs: Dict):
     if cu_seqlens is not None:
         kwargs["cu_seqlens_q"] = cu_seqlens
         kwargs["cu_seqlens_k"] = cu_seqlens
+
+    if max_seqlen is not None:
         kwargs["max_seqlen_q"] = max_seqlen
         kwargs["max_seqlen_k"] = max_seqlen
 
@@ -153,15 +156,14 @@ class MHA(nn.Module):
         # rotary embedding
         indexes = kwargs.pop("indexes", 0)
         max_seqlen = kwargs.get("max_seqlen", None)
-        q = self.rotary_emb(
-            q, offsets=indexes, cache_type="query", interleaved=self.interleaved, max_seqlen=max_seqlen, in_place=True
-        )
-        k = self.rotary_emb(
-            k, offsets=indexes, cache_type="key", interleaved=self.interleaved, max_seqlen=max_seqlen, in_place=True
-        )
+        q = self.rotary_emb(q, offsets=indexes, cache_type="query", interleaved=self.interleaved, max_seqlen=max_seqlen)
+        k = self.rotary_emb(k, offsets=indexes, cache_type="key", interleaved=self.interleaved, max_seqlen=max_seqlen)
 
         # self attention
         kwargs = _convert_cu_seqlens_for_qksplited(kwargs)
+        if gpc.config.data.use_packed_dataset is False:
+            kwargs.pop("max_seqlen_q", None)
+            kwargs.pop("max_seqlen_k", None)
         context = self.inner_attn(q, k, v, **kwargs)
 
         # wo
@@ -271,8 +273,14 @@ class MHA(nn.Module):
                     empties = attention_mask[..., -1].sum(dim=-1)
                     indexes4q = sequence_len_offset * torch.ones(q.size(0), dtype=torch.int, device=q.device) - empties
                     indexes4k = sequence_len_offset * torch.ones(k.size(0), dtype=torch.int, device=k.device) - empties
+                    # TODO To fit flash_attn apis, we rearrange q&k to pack them here and
+                    # calculate rope for this batch input. Waiting to be optimized
+                    q = rearrange(q, "b s h d -> s b h d", d=self.head_dim)  # pack input
+                    k = rearrange(k, "b s h d -> s b h d", d=self.head_dim)
                     q = self.rotary_emb(q, offsets=indexes4q, cache_type="query", interleaved=self.interleaved)
                     k = self.rotary_emb(k, offsets=indexes4k, cache_type="key", interleaved=self.interleaved)
+                    q = rearrange(q, "s b h d -> b s h d", d=self.head_dim)  # unpack
+                    k = rearrange(k, "s b h d -> b s h d", d=self.head_dim)
 
             kv = torch.stack([k, v], dim=2)
             # update kv cache after rotary embedding when disable dynamic ntk rope.
@@ -401,8 +409,12 @@ class GQA(nn.Module):
             self.wk = new_linear("wk", embed_dim, self.kv_dim, bias, **factory_kwargs)
             self.wv = new_linear("wv", embed_dim, self.kv_dim, bias, **factory_kwargs)
 
-        self.inner_attn = SelfAttention(causal=causal, softmax_scale=softmax_scale, attention_dropout=dropout)
-        self.inner_cross_attn = CrossAttention(causal=causal, softmax_scale=softmax_scale, attention_dropout=dropout)
+        self.inner_attn = SelfAttention(
+            causal=causal, softmax_scale=softmax_scale, attention_dropout=dropout, layer_idx=layer_idx
+        )
+        self.inner_cross_attn = CrossAttention(
+            causal=causal, softmax_scale=softmax_scale, attention_dropout=dropout, layer_idx=layer_idx
+        )
 
         self.wo = new_linear("wo", embed_dim, embed_dim, bias, **factory_kwargs)
 
@@ -454,6 +466,10 @@ class GQA(nn.Module):
             )
 
         kv = torch.concat([k.unsqueeze(2), v.unsqueeze(2)], dim=2)
+
+        if gpc.config.data.use_packed_dataset is False:
+            kwargs.pop("max_seqlen_q", None)
+            kwargs.pop("max_seqlen_k", None)
 
         # self attention
         context = self.inner_attn(q, kv, **kwargs)
@@ -530,8 +546,14 @@ class GQA(nn.Module):
                 empties = attention_mask[..., -1].sum(dim=-1)
                 indexes4q = sequence_len_offset * torch.ones(q.size(0), dtype=torch.int, device=q.device) - empties
                 indexes4k = sequence_len_offset * torch.ones(k.size(0), dtype=torch.int, device=k.device) - empties
+                # TODO To fit flash_attn apis, we rearrange q&k to pack them here and
+                # calculate rope for this batch input. Waiting to be optimized
+                q = rearrange(q, "b s h d -> s b h d", d=self.head_dim)  # pack input
+                k = rearrange(k, "b s h d -> s b h d", d=self.head_dim)
                 q = self.rotary_emb(q, offsets=indexes4q, cache_type="query", interleaved=self.interleaved)
                 k = self.rotary_emb(k, offsets=indexes4k, cache_type="key", interleaved=self.interleaved)
+                q = rearrange(q, "s b h d -> b s h d", d=self.head_dim)  # unpack
+                k = rearrange(k, "s b h d -> b s h d", d=self.head_dim)
 
         kv = torch.stack([k, v], dim=2)
 
