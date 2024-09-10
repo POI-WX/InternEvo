@@ -297,7 +297,6 @@ def apply_rotary_emb(
     x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, interleaved: bool = False, in_place: bool = False
 ):
     # TODO: Support deeplink in a more unified manner
-    use_fused_rope = gpc.config.model.get("use_fused_rope", True)
     if internlm_accelerator.get_accelerator_backend() == AcceleratorType.DIPU:
         return DeeplinkApplyRotaryEmb.apply(x, cos, sin, interleaved, in_place)
     if internlm_accelerator.get_accelerator_backend() == AcceleratorType.NPU:
