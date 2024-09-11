@@ -21,6 +21,14 @@ from internlm.core.parallel.comm.isp import (
     auto_wrap_distributed_attention,
     auto_wrap_func_distributed_attention,
 )
+from internlm.model.ops.utils import pack_output_after_attn, unpack_qkv_before_attn
+from internlm.utils.common import get_current_device
+from internlm.utils.utils import (
+    CuSeqlenType,
+    QKVPackType,
+    check_attention_argument,
+    params_dispatch_with_condition,
+)
 
 if get_accelerator().get_accelerator_backend() in [AcceleratorType.DIPU, AcceleratorType.DITORCH]:
     try:
@@ -40,15 +48,6 @@ else:
         )
     except (ModuleNotFoundError, ImportError):
         pass
-
-from internlm.model.ops.utils import pack_output_after_attn, unpack_qkv_before_attn
-from internlm.utils.common import get_current_device
-from internlm.utils.utils import (
-    CuSeqlenType,
-    QKVPackType,
-    check_attention_argument,
-    params_dispatch_with_condition,
-)
 
 try:
     from torch_npu import npu_fusion_attention as _origin_npu_fixedlen_qkvsplited_func
