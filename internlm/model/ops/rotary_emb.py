@@ -297,7 +297,7 @@ def apply_rotary_emb(
     x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, interleaved: bool = False, in_place: bool = False
 ):
     # TODO: Support deeplink in a more unified manner
-    if internlm_accelerator.get_accelerator_backend() == AcceleratorType.DIPU:
+    if internlm_accelerator.get_accelerator_backend() in [AcceleratorType.DIPU, AcceleratorType.DITORCH]:
         return DeeplinkApplyRotaryEmb.apply(x, cos, sin, interleaved, in_place)
     if internlm_accelerator.get_accelerator_backend() == AcceleratorType.NPU:
         # return rotary_emb_in_rotate_half_style(x, cos, sin, interleaved, use_fused_rope)

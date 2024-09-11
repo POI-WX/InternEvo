@@ -21,11 +21,26 @@ from internlm.core.parallel.comm.isp import (
     auto_wrap_distributed_attention,
     auto_wrap_func_distributed_attention,
 )
-from internlm.model.ops.ring_flash_attn import (
-    zigzag_ring_flash_attn_kvpacked_func_with_sliding_window,
-    zigzag_ring_flash_attn_qkvpacked_func_with_sliding_window,
-    zigzag_ring_flash_attn_qkvsplited_func_with_sliding_window,
-)
+
+if get_accelerator().get_accelerator_backend() in [AcceleratorType.DIPU, AcceleratorType.DITORCH]:
+    try:
+        from deeplink_ext.internevo_ops import (
+            zigzag_ring_flash_attn_kvpacked_func_with_sliding_window,
+            zigzag_ring_flash_attn_qkvpacked_func_with_sliding_window,
+            zigzag_ring_flash_attn_qkvsplited_func_with_sliding_window,
+        )
+    except (ModuleNotFoundError, ImportError):
+        pass
+else:
+    try:
+        from internlm.model.ops.ring_flash_attn import (
+            zigzag_ring_flash_attn_kvpacked_func_with_sliding_window,
+            zigzag_ring_flash_attn_qkvpacked_func_with_sliding_window,
+            zigzag_ring_flash_attn_qkvsplited_func_with_sliding_window,
+        )
+    except (ModuleNotFoundError, ImportError):
+        pass
+
 from internlm.model.ops.utils import pack_output_after_attn, unpack_qkv_before_attn
 from internlm.utils.common import get_current_device
 from internlm.utils.utils import (
@@ -840,7 +855,7 @@ def _select_attn_op(op_type: AttnOpType) -> Tuple[AttnType, Callable]:
             assert enable_2D_sp is False, "2D attention for npu is not yet implemented"
 
             attn_type = AttnType.NPUFlash
-        elif device_backend == AcceleratorType.DIPU and deeplink_flash_attn_impl:
+        elif device_backend in [AcceleratorType.DIPU, AcceleratorType.DITORCH] and deeplink_flash_attn_impl:
             assert enable_2D_sp is False, "2D attention for deeplink is not yet implemented"
 
             attn_type = AttnType.DeepLinkFlash
