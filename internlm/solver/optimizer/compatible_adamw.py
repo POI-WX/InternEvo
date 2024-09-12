@@ -10,7 +10,9 @@ logger = get_logger(__file__)
 internlm_accelerator = get_accelerator()
 
 try:
-    from deeplink_ext.internevo_ops import AdamW as DeeplinkFusedAdamW
+    from deeplink_ext.internevo_ops import (  # noqa: F401 # pylint: disable=W0611
+        AdamW as DeeplinkFusedAdamW,
+    )
 
     deeplink_adamw_impl = True
 except (ModuleNotFoundError, ImportError):
@@ -27,7 +29,12 @@ except (ModuleNotFoundError, ImportError):
 
 
 # TODO: 给上次一个统一的接口，这些接口都能被下层的各种实现支持，哪些参数应该保留，那些参数应该省略？
-def new_compatible_adamw(params, lr: float = 0.001, betas: Tuple[float, float] = (0.9, 0.999), eps: float = 1e-8):
+def new_compatible_adamw(
+    params,
+    lr: float = 0.001,
+    betas: Tuple[float, float] = (0.9, 0.999),
+    eps: float = 1e-8,
+):
     """
     return a compatibel adamw instance.
     """
@@ -54,7 +61,7 @@ def new_compatible_adamw(params, lr: float = 0.001, betas: Tuple[float, float] =
                 "Use Deeplink FusedAdamW to avoid nan grad norm when "
                 "model size is larger and use_fp32_norm=True, Please note this!"
             )
-        return DeeplinkFusedAdamW(params, lr=lr, betas=betas, eps=eps)
+        # return DeeplinkFusedAdamW(params, lr=lr, betas=betas, eps=eps)
     else:
         if gpc.is_rank_for_log():
             logger.warning("Use torch.optim.AdamW rather than FusedAdamW. Please note this!")
