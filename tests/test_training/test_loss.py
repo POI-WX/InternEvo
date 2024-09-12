@@ -121,6 +121,7 @@ def train(
     else:
         launcher = "torch"
         config.model.parallel_output = False
+        config.model.checkpoint = True
 
     initialize_distributed_env(config=config, launcher=launcher)
     assert hasattr(gpc, "config") and gpc.config is not None
