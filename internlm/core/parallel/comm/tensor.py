@@ -19,6 +19,7 @@ from internlm.core.parallel.comm.utils import (
     all_gather_raw,
     all_reduce_raw,
     gather_forward_split_backward,
+    reduce_forward,
     reduce_scatter_raw,
     split_forward_gather_backward,
 )
@@ -292,10 +293,14 @@ class HeadSequenceParallelCommunicator(SequenceParallelCommunicator):
 class MoESequenceParallelCommunicator:
     """
     sequence parallel communicator for moe layer
+    parallel_mode: sequence parallel mode
+    reverse: gather input when enter moe and split output when leave if set False,
+             otherwise do the opposite operation
     """
 
-    def __init__(self, parallel_mode: ParallelMode) -> None:
+    def __init__(self, parallel_mode: ParallelMode, reverse: bool = False) -> None:
         self._parallel_mode = parallel_mode
+        self.reverse = reverse
 
     def register_module_hook(self, module: MoE) -> None:
         assert isinstance(module, MoE), "MoE sequence parallel communicator is only support moe module"
@@ -308,7 +313,10 @@ class MoESequenceParallelCommunicator:
         allgather input before forward and split grad_input after backward.
         """
         _input = args[0] if len(args) > 0 else kwargs.pop("hidden_states")
-        _input = gather_forward_split_backward(_input, self._parallel_mode, dim=_GATHER_DIM)
+        if self.reverse:
+            _input = split_forward_gather_backward(_input, self._parallel_mode, dim=_REDUCE_DIM)
+        else:
+            _input = gather_forward_split_backward(_input, self._parallel_mode, dim=_GATHER_DIM)
 
         return (_input, *args), kwargs
 
@@ -317,7 +325,10 @@ class MoESequenceParallelCommunicator:
         split output after forward and allgather grad_output before backward.
         """
         _output, *_others = output
-        _output = split_forward_gather_backward(_output, self._parallel_mode, dim=_REDUCE_DIM)
+        if self.reverse:
+            _output = gather_forward_split_backward(_output, self._parallel_mode, dim=_GATHER_DIM)
+        else:
+            _output = split_forward_gather_backward(_output, self._parallel_mode, dim=_REDUCE_DIM)
 
         return (_output, *_others)
 
@@ -341,7 +352,12 @@ class EmbeddingTensorParallelCommunicator:
         """
         _emb_dim = 2  # [bsz, seqlen, emb_dim]
 
-        return gather_forward_split_backward(output, self._parallel_mode, dim=_emb_dim)
+        if module.vocab_parallel:
+            output = reduce_forward(output, self._parallel_mode)
+        else:
+            output = gather_forward_split_backward(output, self._parallel_mode, dim=_emb_dim)
+
+        return output
 
 
 class EmbeddingSequenceParallelCommunicator:
@@ -363,7 +379,12 @@ class EmbeddingSequenceParallelCommunicator:
         """
         _emb_dim, _seq_dim = 2, 1  # [bsz, seqlen, emb_dim]
 
-        output = gather_forward_split_backward(output, self._parallel_mode, dim=_emb_dim)
+        # tp:
+        if module.vocab_parallel:
+            output = reduce_forward(output, self._parallel_mode)
+        else:
+            output = gather_forward_split_backward(output, self._parallel_mode, dim=_emb_dim)
+        # sp:
         output = split_forward_gather_backward(output, self._parallel_mode, dim=_seq_dim)
 
         return output

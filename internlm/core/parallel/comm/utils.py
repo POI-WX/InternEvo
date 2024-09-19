@@ -2,7 +2,6 @@
 # -*- encoding: utf-8 -*-
 
 from abc import ABC, abstractmethod
-from typing import Callable
 
 import torch
 import torch.distributed as dist
@@ -117,6 +116,17 @@ def _gather(input_, parallel_mode, dim=-1):
     return output
 
 
+def _reduce(input_, parallel_mode):
+    # skip if only one rank involved
+    if gpc.get_world_size(parallel_mode) == 1:
+        return input_
+
+    group = gpc.get_cpu_group(parallel_mode) if input_.device.type == "cpu" else gpc.get_group(parallel_mode)
+    dist.all_reduce(input_, group=group)
+
+    return input_
+
+
 class _GatherForwardSplitBackward(torch.autograd.Function):
     """Gather the input from model parallel region and concatenate.
 
@@ -174,23 +184,45 @@ def split_forward_gather_backward(input_, parallel_mode, dim):
     return _SplitForwardGatherBackward.apply(input_, parallel_mode, dim)
 
 
+class _ReduceForward(torch.autograd.Function):
+    """
+    All-reduce the input from the model parallel region.
+
+    Args:
+        input_: input matrix.
+        parallel_mode: parallel mode.
+    """
+
+    @staticmethod
+    def symbolic(input_):
+        return _reduce(input_, parallel_mode=None)
+
+    @staticmethod
+    def forward(ctx, input_, parallel_mode):  # pylint: disable=W0613
+        return _reduce(input_, parallel_mode)
+
+    @staticmethod
+    def backward(ctx, grad_output):  # pylint: disable=W0613
+        return grad_output, None
+
+
+def reduce_forward(input_, parallel_mode):
+    return _ReduceForward.apply(input_, parallel_mode)
+
+
 def all_gather_raw(
     input_: Tensor,
     process_group: ProcessGroup,
     async_op: bool = False,
     gather_dim: int = 0,
-    memory_pool_allocator: Callable = None,
 ):
     world_size = dist.get_world_size(process_group)
     if world_size <= 1:
         return input_, None
 
-    if memory_pool_allocator is not None:
-        output = memory_pool_allocator()
-    else:
-        shape = list(input_.shape)
-        shape[gather_dim] = shape[gather_dim] * world_size
-        output = torch.empty(shape, dtype=input_.dtype, device=input_.device)
+    shape = list(input_.shape)
+    shape[gather_dim] = shape[gather_dim] * world_size
+    output = torch.empty(shape, dtype=input_.dtype, device=input_.device)
 
     handle = dist.all_gather_into_tensor(output, input_.contiguous(), group=process_group, async_op=async_op)
     return output, handle
@@ -202,7 +234,6 @@ def reduce_scatter_raw(
     op=dist.ReduceOp.SUM,
     async_op: bool = False,
     reduce_dim: int = 0,
-    memory_pool_allocator: Callable = None,
 ):
     world_size = dist.get_world_size(process_group)
     assert input_.shape[reduce_dim] % world_size == 0
@@ -213,14 +244,11 @@ def reduce_scatter_raw(
     shape_list = list(input_.shape)
     shape_list[reduce_dim] = shape_list[reduce_dim] // world_size
 
-    if memory_pool_allocator is not None:
-        output = memory_pool_allocator(tuple(shape_list))
-    else:
-        output = torch.empty(
-            shape_list,
-            dtype=input_.dtype,
-            device=input_.device,
-        ).contiguous()
+    output = torch.empty(
+        shape_list,
+        dtype=input_.dtype,
+        device=input_.device,
+    ).contiguous()
 
     handle = dist.reduce_scatter_tensor(output, input_.contiguous(), op=op, group=process_group, async_op=async_op)
     return output, handle

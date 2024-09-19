@@ -16,11 +16,22 @@ def is_moe_param(param: torch.Tensor) -> bool:
     return False
 
 
+def is_gate_param(param: torch.Tensor) -> bool:
+    if hasattr(param, "is_gate") and param.is_gate:
+        return True
+    return False
+
+
 def Silu(w1_o, w2_o):
     return F.silu(w1_o) * w2_o
 
 
+def Gelu(w1_o, w2_o):
+    return F.gelu(w1_o) * w2_o
+
+
 Silu = torch.jit.script(Silu)
+Gelu = torch.jit.script(Gelu)
 
 
 def update_kv_cache(kv, inference_params, layer_idx):

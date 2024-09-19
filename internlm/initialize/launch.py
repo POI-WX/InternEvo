@@ -73,6 +73,9 @@ def args_sanity_check():
     if "model_type" not in gpc.config:
         gpc.config._add_item("model_type", ModelType.INTERNLM.name)
 
+    if "use_apex_adam" not in gpc.config:
+        gpc.config._add_item("use_apex_adam", False)
+
     # procssing the parallel config in gpc
     if "zero1" not in gpc.config.parallel:
         gpc.config.parallel._add_item("zero1", dict(size=-1, fsdp=False))
@@ -88,7 +91,13 @@ def args_sanity_check():
         gpc.config.parallel._add_item("tensor", dict(size=1, mode=TensorParallelMode.mtp.name))
 
     if "weight" not in gpc.config.parallel:
-        gpc.config.parallel._add_item("weight", dict(size=1, overlap=False, memory_pool=False))
+        gpc.config.parallel._add_item("weight", dict(size=1, overlap=False))
+
+    if "expert" not in gpc.config.parallel:
+        gpc.config.parallel._add_item("expert", dict(size=-1, no_tp=False))
+
+    if "expert_weight" not in gpc.config.parallel:
+        gpc.config.parallel._add_item("expert_weight", dict(size=1, overlap=False))
 
     if isinstance(gpc.config.parallel.pipeline, int):
         pp = gpc.config.parallel.pipeline
@@ -339,10 +348,16 @@ def args_sanity_check():
     if "MoE" in gpc.config.get("model_type", ModelType.INTERNLM.name):
         if "num_experts" not in model:
             model._add_item("num_experts", 1)
-        if "moe_use_residual" not in model:
-            model._add_item("moe_use_residual", False)
+        if "top_k" not in model:
+            model.top_k = 1
+        if "num_shared_experts" not in model:
+            model.num_shared_experts = 1 if getattr(model, "moe_use_residual", False) else 0
+            if hasattr(model, "moe_use_residual"):
+                delattr(model, "moe_use_residual")
         if "moe_type" not in model:
             model._add_item("moe_type", "GShard")
+        if "moe_layer_kwargs" not in model:
+            model.moe_layer_kwargs = {}
 
     if "mlp_layer_fusion" not in model:
         model._add_item("mlp_layer_fusion", False)
@@ -414,11 +429,13 @@ def args_sanity_check():
     # set default value for weight parallel
     if gpc.config.parallel["weight"].get("overlap", None) is None:
         gpc.config.parallel["weight"]["overlap"] = False
-    if gpc.config.parallel["weight"].get("memory_pool", None) is None:
-        gpc.config.parallel["weight"]["memory_pool"] = False
     if gpc.config.parallel["tensor"]["mode"] != TensorParallelMode.isp.name:
         assert gpc.config.parallel["weight"]["size"] <= 1, "weight parallel is only supported with isp"
-
+    # set default value for expert_weight parallel
+    if gpc.config.parallel["expert_weight"].get("overlap", None) is None:
+        gpc.config.parallel["expert_weight"]["overlap"] = False
+    if gpc.config.parallel["expert"].get("no_tp", None) is None:
+        gpc.config.parallel["expert"]["no_tp"] = False
     # currently only interleaved pipeline scheduler with overlap can guarantee loss accuracy
     if hasattr(gpc.config.model, "num_chunks") and gpc.config.model.num_chunks > 1:
         assert (
@@ -499,6 +516,13 @@ def args_sanity_check():
             -1,
             gpc.get_world_size(ParallelMode.DATA),
         ), "moe only support zero1, set zero1=dict(size=-1,...) can fix this"
+
+        if gpc.config.parallel.tensor.mode != "isp":
+            assert gpc.config.parallel.expert_weight.size <= 1, "expert weight parallel is only supported with isp"
+    else:
+        assert (
+            gpc.config.parallel.expert.size <= 1 and gpc.config.parallel.expert_weight.size <= 1
+        ), "expert parallel is only supported in MoE setting"
 
     # sequence_2D
     if "sequence_2D" not in gpc.config.parallel:

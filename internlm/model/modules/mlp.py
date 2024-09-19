@@ -7,8 +7,9 @@ import torch
 from torch import nn
 
 from internlm.model.modules.linear import new_linear
-from internlm.model.modules.utils import Silu
+from internlm.model.modules.utils import Gelu, Silu
 from internlm.utils.logger import get_logger
+from internlm.utils.utils import ActivationType
 
 logger = get_logger(__file__)
 
@@ -68,28 +69,42 @@ class FeedForward(nn.Module):
         multiple_of: int = 256,
         mlp_layer_fusion: Optional[bool] = False,
         activation_type: str = "swiglu",
+        is_expert: bool = False,
     ):
         super().__init__()
 
-        # TODO: support gelu...
-        assert activation_type in ("swiglu"), f"Unsupported activation type: {activation_type}"
+        assert activation_type in (
+            ActivationType.swiglu.name,
+            ActivationType.gelu.name,
+        ), f"Unsupported activation type: {activation_type}"
 
         self.mlp_layer_fusion = mlp_layer_fusion
+        self.activation_type = activation_type
 
         hidden_features = multiple_of * ((hidden_features + multiple_of - 1) // multiple_of)
 
         if self.mlp_layer_fusion:
             assert bias is False, "Fuesd FeedForward only support bias is False."
 
-            self.fused_w1_w3 = new_linear("w13", in_features, hidden_features * 2, bias, device=device, dtype=dtype)
-            self.w2 = new_linear("w2", hidden_features, out_features, bias, device=device, dtype=dtype)
+            self.fused_w1_w3 = new_linear(
+                "w13", in_features, hidden_features * 2, bias, device=device, dtype=dtype, is_expert=is_expert
+            )
+            self.w2 = new_linear(
+                "w2", hidden_features, out_features, bias, device=device, dtype=dtype, is_expert=is_expert
+            )
 
             self._register_load_state_dict_pre_hook(_mlp_pre_load_convert, with_module=True)
             self._register_state_dict_hook(_mlp_save_convert)
         else:
-            self.w1 = new_linear("w1", in_features, hidden_features, bias, device=device, dtype=dtype)
-            self.w2 = new_linear("w2", hidden_features, out_features, bias, device=device, dtype=dtype)
-            self.w3 = new_linear("w3", in_features, hidden_features, bias, device=device, dtype=dtype)
+            self.w1 = new_linear(
+                "w1", in_features, hidden_features, bias, device=device, dtype=dtype, is_expert=is_expert
+            )
+            self.w2 = new_linear(
+                "w2", hidden_features, out_features, bias, device=device, dtype=dtype, is_expert=is_expert
+            )
+            self.w3 = new_linear(
+                "w3", in_features, hidden_features, bias, device=device, dtype=dtype, is_expert=is_expert
+            )
 
     def forward(self, x):
         if not self.mlp_layer_fusion:
@@ -98,7 +113,12 @@ class FeedForward(nn.Module):
         else:
             fussed_out = self.fused_w1_w3(x)
             w1_o, w3_o = torch.split(fussed_out, fussed_out.shape[-1] // 2, dim=-1)
-        out = self.w2(Silu(w1_o, w3_o))
+
+        if self.activation_type is ActivationType.swiglu.name:
+            out = self.w2(Silu(w1_o, w3_o))
+        else:
+            out = self.w2(Gelu(w1_o, w3_o))
+
         return out
 
 
@@ -112,7 +132,17 @@ def new_feed_forward(
     multiple_of: int = 256,
     mlp_layer_fusion: Optional[bool] = False,
     activation_type: str = "swiglu",
+    is_expert: bool = False,
 ) -> FeedForward:
     return FeedForward(
-        in_features, hidden_features, out_features, bias, device, dtype, multiple_of, mlp_layer_fusion, activation_type
+        in_features,
+        hidden_features,
+        out_features,
+        bias,
+        device,
+        dtype,
+        multiple_of,
+        mlp_layer_fusion,
+        activation_type,
+        is_expert,
     )

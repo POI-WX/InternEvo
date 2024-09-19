@@ -28,7 +28,7 @@ ckpt = dict(
     # 'load_ckpt_info' setting guide:
     # 1. the 'path' indicate ckpt path,
     # 2. the 'content‘ means what states will be loaded, support: "model", "sampler", "optimizer", "scheduler", "all"
-    # 3. the ’ckpt_type‘ means the type of checkpoint to be loaded, support: "internevo", "hf", or other custom-defined 
+    # 3. the ’ckpt_type‘ means the type of checkpoint to be loaded, support: "internevo", "hf", or other custom-defined
     # load function such as "llama"
     load_ckpt_info=dict(path=MODEL_ONLY_FOLDER, content=("model",), ckpt_type="internevo"),
     # 'auto_resume' is designed to automatically load the latest checkpoint from 'save_ckpt_folder' when encountering
@@ -156,9 +156,9 @@ model = dict(
     # qk_interleaved = False: q[-1] = [q1,q3,q5,...,q2,q4,q6,...], k[-1] = [k1,k3,k5,...,k2,k4,k6,...]
     qk_interleaved=False,
     num_chunks=1,  # if num_chunks > 1, interleaved pipeline scheduler is used.
+    moe_type="GShard",  # Support: "GShard", "MegaBlock", "MegaBlock-D", "Dropless"
     num_experts=4,
-    moe_use_residual=False,
-    moe_type="GShard",  # Support: "GShard", "MegaBlock", "MegaBlock-D"
+    top_k=2,
 )
 """
 zero1 parallel (dict):
@@ -183,13 +183,24 @@ pipeline parallel (dict):
 weight parallel (dict):
     1. size: int, the size of weight parallel.
     2. overlap: bool, enable/disable all_gather/reduce_scatter communication overlap, defaults to False.
-    3. memory_pool: bool, enable/disable memory pool, defaults to False.
+expert parallel (dict):
+    1. size: int
+        * if size <= 0, ep size equals to dp size, but if the number of experts is smaller than dp size, set ep size
+            to be the number of experts to make sure each device has one expert.
+        * if size == 1, all experts are placed in each device, running as dp-only.
+        * if size > 1, all experts are placed in k devices and each device has n/k experts, where n is the total
+            number of experts and k = size.
+expert weight parallel (dict):
+    1. size: int, the size of weight parallel for expert module, distinct with global weight parallel size.
+    2. overlap: bool, enable/disable all_gather/reduce_scatter communication overlap, defaults to False.
 """
 parallel = dict(
     zero1=dict(size=-1, fsdp=False),
     tensor=dict(size=1, mode="mtp"),
     pipeline=dict(size=1, interleaved_overlap=True),
-    weight=dict(size=1, overlap=True, memory_pool=True),
+    weight=dict(size=1, overlap=True),
+    expert=dict(size=-1, no_tp=False),
+    expert_weight=dict(size=1, overlap=True),
 )
 
 cudnn_deterministic = False
@@ -208,18 +219,6 @@ monitor = dict(
     ),
 )
 
-# custom moe impl configs
-# GShard MoE config
-moe = dict(
-    top_k=2,
-    capacity_factor=1.0,
-    eval_capacity_factor=1.0,
-    min_capacity=4,
-    noisy_gate_policy=None,
-    drop_tokens=True,
-    use_rts=True,
-    use_fused_gating=False,
-)
 
 # MegaBlock MoE config
 # moe = dict(

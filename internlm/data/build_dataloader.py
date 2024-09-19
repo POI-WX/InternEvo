@@ -1,4 +1,5 @@
 # Copyright (c) InternLM. All rights reserved.
+import subprocess
 from functools import partial
 
 import torch.distributed as dist
@@ -6,6 +7,11 @@ from torch.utils.data import ConcatDataset, DataLoader
 
 from internlm.core.context import ParallelMode
 from internlm.core.context import global_context as gpc
+from internlm.data.megatron.batch_sampler import MegatronBatchSampler
+from internlm.data.megatron.collaters import megatron_collate_fn
+from internlm.data.megatron.dataset import build_megatron_dataset
+from internlm.data.mocked.batch_sampler import MockedSequentialBatchSampler
+from internlm.data.mocked.dataset import MockedDataset
 from internlm.data.streaming.batch_sampler import StreamingStaticBatchSampler
 from internlm.data.streaming.collaters import streaming_packed_collate_fn
 from internlm.data.streaming.dataset import (
@@ -44,7 +50,7 @@ def get_tokenized_train_loader_items(data_cfg):
         if data_cfg.get("is_multimodal", False):
             image_token_size = int(data_cfg.image_size // data_cfg.patch_size) ** 2
             train_ds = RandomDatasetMultimodal(
-                num_samples=100000,
+                num_samples=gpc.get_world_size(ParallelMode.DATA) * 500,
                 max_len=data_cfg.seq_len,
                 image_size=data_cfg.image_size,
                 image_token_size=image_token_size,
@@ -54,7 +60,9 @@ def get_tokenized_train_loader_items(data_cfg):
             )
         else:
             train_ds = RandomDataset(
-                num_samples=1000000, max_len=data_cfg.seq_len, fixed_seqlen=data_cfg.fixed_random_dataset_seqlen
+                num_samples=gpc.get_world_size(ParallelMode.DATA) * 500,
+                max_len=data_cfg.seq_len,
+                fixed_seqlen=data_cfg.fixed_random_dataset_seqlen,
             )
 
             if data_cfg.pack_sample_into_one:
@@ -139,6 +147,62 @@ def get_streaming_train_loader_items(data_cfg):
     return train_ds, train_sampler, streaming_packed_collate_fn
 
 
+def get_megatron_train_loader_items(data_cfg):
+    try:
+        from internlm.data.megatron import helpers  # noqa # pylint: disable=W0611
+    except ImportError:
+        if gpc.is_rank_for_log():
+            subprocess.run(  # noqa # pylint: disable=W1510
+                [
+                    "g++",
+                    "-O3",
+                    "-shared",
+                    "-std=c++11",
+                    "-fPIC",
+                    "-fdiagnostics-color",
+                    "-I$(python3-config --includes)",
+                    "-I$(python3 -m pybind11 --includes)",
+                    "internlm/data/megatron/helpers.cpp",
+                    "-o",
+                    "internlm/data/megatron/helpers.so",
+                ]
+            )
+    train_ds = build_megatron_dataset(
+        data_prefix=data_cfg.train_folder,
+        data_impl=data_cfg.get("data_impl", "infer"),
+        splits_string="1.0, 0.0, 0.0",
+        train_valid_test_num_samples=[9600000, 0, 0],
+        seq_len=data_cfg.seq_len,
+        seed=data_cfg.get("seed", 1024),
+        skip_warmup=True,
+    )
+
+    train_sampler = MegatronBatchSampler(
+        total_samples=len(train_ds),
+        consumed_samples=0,
+        batch_size=data_cfg.micro_num * data_cfg.micro_bsz,
+        drop_last=True,
+    )
+
+    train_collate_fn = partial(
+        megatron_collate_fn, micro_num=data_cfg.micro_num, micro_bsz=data_cfg.micro_bsz, seq_len=data_cfg.seq_len
+    )
+
+    return train_ds, train_sampler, train_collate_fn
+
+
+def get_mock_train_loader_items(data_cfg):
+    train_ds = MockedDataset(
+        data_dir=data_cfg.train_folder,  # defined the path of mocked data
+        micro_bsz=data_cfg.micro_bsz,
+        seq_len=data_cfg.seq_len,
+        mocked_steps=data_cfg.mocked_steps,  # defined the steps of mocked data
+    )
+    train_sampler = MockedSequentialBatchSampler(train_ds, data_cfg.micro_num)
+    train_collate_fn = partial(packed_collate_fn, packed_length=data_cfg.seq_len * data_cfg.micro_bsz)
+    return train_ds, train_sampler, train_collate_fn
+
+
 def build_train_loader_with_data_type():
     """
     Build and return the training data loader based on data type.
@@ -153,6 +217,14 @@ def build_train_loader_with_data_type():
         dataset_types = list(get_dataset_type_ids_map(train_folder).keys()) if train_folder else ["en", "cn", "code"]
     elif data_cfg.type == DataType.streaming.name:
         train_ds, train_sampler, train_collate_fn = get_streaming_train_loader_items(data_cfg)
+        # TODO: support more dataset_types
+        dataset_types = ["en"]
+    elif data_cfg.type == DataType.megatron.name:
+        train_ds, train_sampler, train_collate_fn = get_megatron_train_loader_items(data_cfg)
+        # TODO: support more dataset_types
+        dataset_types = ["en"]
+    elif data_cfg.type == DataType.mocked.name:
+        train_ds, train_sampler, train_collate_fn = get_mock_train_loader_items(data_cfg)
         # TODO: support more dataset_types
         dataset_types = ["en"]
     else:
@@ -176,8 +248,13 @@ def build_valid_loader_with_data_type():
 
     data_cfg = gpc.config.data
 
-    # TODO: support streaming dataset for validation
-    if data_cfg.type in [DataType.tokenized.name, DataType.streaming.name]:
+    # TODO: For validation, currenlt we only support dummy dataset for streaming/megatron/mocked DataType.
+    if data_cfg.type in [
+        DataType.tokenized.name,
+        DataType.streaming.name,
+        DataType.megatron.name,
+        DataType.mocked.name,
+    ]:
         valid_ds, valid_collate_fn = get_tokenized_valid_loader_items(data_cfg)
     else:
         raise ValueError(f"dataset type {data_cfg.type} is not supported")

@@ -47,11 +47,16 @@ class ModelType(Enum):
     LLAMA2 = 3
     INTERNLM_MoE = 4
     LLAVA = 5
+    QWEN2 = 6
+    BAICHUAN2 = 7
+    GEMMA = 8
 
 
 class DataType(Enum):
     streaming = 1
     tokenized = 2
+    megatron = 3
+    mocked = 4
 
 
 class TensorParallelMode(Enum):
@@ -59,6 +64,11 @@ class TensorParallelMode(Enum):
     msp = 2
     fsp = 3
     isp = 4
+
+
+class ActivationType(Enum):
+    swiglu = 1
+    gelu = 2
 
 
 def check_attention_argument(*args, **kwargs) -> str:

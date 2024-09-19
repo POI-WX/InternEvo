@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from internlm.core.context import ParallelMode
 from internlm.core.context import global_context as gpc
 from internlm.model.moe.base_layer import BaseMoELayer
-from internlm.model.moe.megablock.mlp import MegaBlockFeedForward
+from internlm.model.moe.megablocks.mlp import MegaBlockFeedForward
 from internlm.model.moe.utils import all_to_all
 
 try:
@@ -35,14 +35,16 @@ class MegaBlockMoE(BaseMoELayer):
         hidden_features: int,
         out_features: int,
         num_experts: int,
+        top_k: int,
         ep_group: Optional[torch.distributed.ProcessGroup],
         ep_size: int,
-        top_k: int = 1,
-        capacity_factor: float = 1.0,
-        drop_tokens: bool = True,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.device] = None,
+        mlp_layer_fusion: bool = False,  # pylint: disable=W0613
         multiple_of: int = 256,
+        activation_type: str = "swiglu",  # pylint: disable=W0613
+        capacity_factor: float = 1.0,
+        drop_tokens: bool = True,
     ) -> None:
         assert not gpc.config.parallel.sequence_parallel, "do not support sequence parallel"
         assert ops is not None, 'MegaBlocks not found, please run "pip install megablocks".'
@@ -73,6 +75,8 @@ class MegaBlockMoE(BaseMoELayer):
         # so that we can pass it to radix sort.
         self.sort_end_bit = max(int(np.ceil(np.log2(self.num_experts))), 1)
         self.quantize_scatter_num_bits = -1
+        # re-init the number of experts in each device
+        self.num_local_experts = num_experts // ep_size
 
         self.forward_fn = self._parallel_forward if gpc.expert_parallel_size > 1 else self._forward
 

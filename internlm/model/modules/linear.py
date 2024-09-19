@@ -133,8 +133,10 @@ class SPFusedDenseFunc(torch.autograd.Function):
             handle_x.wait()
 
             x = x.reshape(batch_dim, x.shape[-1])
-            if gpc.is_using_parallel_mode(ParallelMode.PIPELINE) and gpc.config.parallel["pipeline"].get(
-                "zero_bubble", False
+            if (
+                gpc.is_using_parallel_mode(ParallelMode.PIPELINE)
+                and gpc.config.parallel["pipeline"].get("zero_bubble", False)
+                and not gpc.is_first_rank(ParallelMode.PIPELINE)
             ):
                 from internlm.core.scheduler.pipeline_scheduler import WeightGradStore
 
@@ -234,8 +236,10 @@ class WPFusedDenseFunc(torch.autograd.Function):
 
         total_weight = communicator.weight_hook(weight, module=module)
 
-        is_using_ZB = gpc.is_using_parallel_mode(ParallelMode.PIPELINE) and gpc.config.parallel["pipeline"].get(
-            "zero_bubble", False
+        is_using_ZB = (
+            gpc.is_using_parallel_mode(ParallelMode.PIPELINE)
+            and gpc.config.parallel["pipeline"].get("zero_bubble", False)
+            and not gpc.is_first_rank(ParallelMode.PIPELINE)
         )
 
         # compute weight grad
@@ -410,11 +414,12 @@ class ColumnParallelLinear(ParallelLinearWithCommExt):
         multiple_of: int = 1,
         device: torch.device = None,
         dtype: torch.dtype = None,
+        is_expert: bool = False,
     ) -> None:
         if out_features % multiple_of:
             raise ValueError(f"out_features ({out_features}) must be a multiple of {multiple_of}")
 
-        parallel_mode = get_tensor_split_parallel_mode()
+        parallel_mode = get_tensor_split_parallel_mode(is_expert=is_expert)
         super().__init__(
             in_features, out_features, parallel_mode, bias=bias, device=device, dtype=dtype, split_mode="column"
         )
@@ -441,11 +446,12 @@ class RowParallelLinear(ParallelLinearWithCommExt):
         multiple_of: int = 1,
         device: torch.device = None,
         dtype: torch.dtype = None,
+        is_expert: bool = False,
     ) -> None:
         if in_features % multiple_of:
             raise ValueError(f"in_features ({in_features}) must be a multiple of {multiple_of}")
 
-        parallel_mode = get_tensor_split_parallel_mode()
+        parallel_mode = get_tensor_split_parallel_mode(is_expert=is_expert)
         rank = gpc.get_local_rank(parallel_mode)
         super().__init__(
             in_features,
@@ -576,6 +582,7 @@ def new_linear(
     is_reward: bool = False,
     weight_scale: int = 1,
     norm_head: bool = False,
+    is_expert: bool = False,
     **kwargs,
 ) -> nn.Linear:
 
@@ -620,6 +627,7 @@ def new_linear(
             multiple_of,
             device,
             dtype,
+            is_expert,
         )
     elif split_mode == "row":
         return RowParallelLinear(
@@ -629,6 +637,7 @@ def new_linear(
             multiple_of,
             device,
             dtype,
+            is_expert,
         )
     else:
         err_msg = (
